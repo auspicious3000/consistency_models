@@ -8,8 +8,11 @@ import torch.nn as nn
 from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 
 from . import logger
+from fairseq.pdb import set_trace
 
-INITIAL_LOG_LOSS_SCALE = 20.0
+INITIAL_LOG_LOSS_SCALE = 0.0
+from torch.cuda.amp import GradScaler
+from torch.nn.utils import clip_grad_norm_
 
 
 def convert_module_to_f16(l):
@@ -41,7 +44,7 @@ def make_master_params(param_groups_and_shapes):
     for param_group, shape in param_groups_and_shapes:
         master_param = nn.Parameter(
             _flatten_dense_tensors(
-                [param.detach().float() for (_, param) in param_group]
+                [param.detach() for (_, param) in param_group]
             ).view(shape)
         )
         master_param.requires_grad = True
@@ -54,13 +57,10 @@ def model_grads_to_master_grads(param_groups_and_shapes, master_params):
     Copy the gradients from the model parameters into the master parameters
     from make_master_params().
     """
-    for master_param, (param_group, shape) in zip(
-        master_params, param_groups_and_shapes
-    ):
-        master_param.grad = _flatten_dense_tensors(
-            [param_grad_or_zeros(param) for (_, param) in param_group]
-        ).view(shape)
-
+    for master_param, (param_group, shape) in zip(master_params, param_groups_and_shapes):
+        master_param.grad = _flatten_dense_tensors([param_grad_or_zeros(param) for (_, param) in param_group]).view(shape)
+    #set_trace()
+        
 
 def master_params_to_model_params(param_groups_and_shapes, master_params):
     """
@@ -162,6 +162,7 @@ class MixedPrecisionTrainer:
         self.master_params = self.model_params
         self.param_groups_and_shapes = None
         self.lg_loss_scale = initial_lg_loss_scale
+        self.scaler = GradScaler()
 
         if self.use_fp16:
             self.param_groups_and_shapes = get_param_groups_and_shapes(
@@ -175,8 +176,9 @@ class MixedPrecisionTrainer:
 
     def backward(self, loss: th.Tensor):
         if self.use_fp16:
-            loss_scale = 2**self.lg_loss_scale
-            (loss * loss_scale).backward()
+            #loss_scale = 2**self.lg_loss_scale
+            #(loss * loss_scale).backward()
+            self.scaler.scale(loss).backward()
         else:
             loss.backward()
 
@@ -199,9 +201,12 @@ class MixedPrecisionTrainer:
         logger.logkv_mean("grad_norm", grad_norm)
         logger.logkv_mean("param_norm", param_norm)
 
-        for p in self.master_params:
-            p.grad.mul_(1.0 / (2**self.lg_loss_scale))
+        #for p in self.master_params:
+        #    p.grad.mul_(1.0 / (2**self.lg_loss_scale))
+        self.scaler.unscale_(opt)
+        clip_grad_norm_(self.master_params, max_norm=5.0)
         opt.step()
+        self.scaler.update()
         zero_master_grads(self.master_params)
         master_params_to_model_params(self.param_groups_and_shapes, self.master_params)
         self.lg_loss_scale += self.fp16_scale_growth
@@ -217,7 +222,7 @@ class MixedPrecisionTrainer:
     def _compute_norms(self, grad_scale=1.0):
         grad_norm = 0.0
         param_norm = 0.0
-        for p in self.master_params:
+        for i, p in enumerate(self.master_params):
             with th.no_grad():
                 param_norm += th.norm(p, p=2, dtype=th.float32).item() ** 2
                 if p.grad is not None:

@@ -7,6 +7,7 @@ import torch as th
 import torch.distributed as dist
 from torch.nn.parallel.distributed import DistributedDataParallel as DDP
 from torch.optim import RAdam
+from torch.cuda.amp import autocast
 
 from . import dist_util, logger
 from .fp16_util import MixedPrecisionTrainer
@@ -19,6 +20,7 @@ from .fp16_util import (
     master_params_to_model_params,
 )
 import numpy as np
+from fairseq.pdb import set_trace
 
 # For ImageNet experiments, this was a good default value.
 # We found that the lg_loss_scale quickly climbed to
@@ -363,7 +365,7 @@ class CMTrainLoop(TrainLoop):
             or self.step < self.lr_anneal_steps
             or self.global_step < self.total_training_steps
         ):
-            batch, cond = next(self.data)
+            batch, cond, _ = next(self.data)
             self.run_step(batch, cond)
             saved = False
             if (
@@ -475,16 +477,17 @@ class CMTrainLoop(TrainLoop):
                         model_kwargs=micro_cond,
                     )
             elif self.training_mode == "consistency_distillation":
-                compute_losses = functools.partial(
-                    self.diffusion.consistency_losses,
-                    self.ddp_model,
-                    micro,
-                    num_scales,
-                    target_model=self.target_model,
-                    teacher_model=self.teacher_model,
-                    teacher_diffusion=self.teacher_diffusion,
-                    model_kwargs=micro_cond,
-                )
+                with autocast():
+                    compute_losses = functools.partial(
+                        self.diffusion.consistency_losses,
+                        self.ddp_model,
+                        micro,
+                        num_scales,
+                        target_model=self.target_model,
+                        teacher_model=self.teacher_model,
+                        teacher_diffusion=self.teacher_diffusion,
+                        model_kwargs=micro_cond,
+                    )
             elif self.training_mode == "consistency_training":
                 compute_losses = functools.partial(
                     self.diffusion.consistency_losses,

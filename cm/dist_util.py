@@ -13,7 +13,7 @@ import torch.distributed as dist
 
 # Change this to reflect your cluster layout.
 # The GPU for a given rank is (rank % GPUS_PER_NODE).
-GPUS_PER_NODE = 8
+GPUS_PER_NODE = 1
 
 SETUP_RETRY_COUNT = 3
 
@@ -51,7 +51,7 @@ def dev():
     return th.device("cpu")
 
 
-def load_state_dict(path, **kwargs):
+def load_state_dict(path, embeded=None, **kwargs):
     """
     Load a PyTorch file without redundant fetches across MPI ranks.
     """
@@ -70,8 +70,12 @@ def load_state_dict(path, **kwargs):
         data = bytes()
         for _ in range(num_chunks):
             data += MPI.COMM_WORLD.bcast(None)
-
-    return th.load(io.BytesIO(data), **kwargs)
+            
+    ckpt = th.load(io.BytesIO(data), **kwargs)
+            
+    if embeded:
+        return ckpt['model']
+    return ckpt
 
 
 def sync_params(params):

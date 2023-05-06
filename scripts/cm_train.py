@@ -5,7 +5,7 @@ Train a diffusion model on images.
 import argparse
 
 from cm import dist_util, logger
-from cm.image_datasets import load_data
+from cm.speechdiff_dataset import load_data
 from cm.resample import create_named_schedule_sampler
 from cm.script_util import (
     model_and_diffusion_defaults,
@@ -18,6 +18,7 @@ from cm.script_util import (
 from cm.train_util import CMTrainLoop
 import torch.distributed as dist
 import copy
+from fairseq.pdb import set_trace
 
 
 def main():
@@ -66,10 +67,11 @@ def main():
         batch_size = args.batch_size
 
     data = load_data(
-        data_dir=args.data_dir,
+        manifest_path=args.manifest_path,
+        feat_root=args.feat_root,
+        label_path=args.label_path,
+        spk2info=args.spk2info,
         batch_size=batch_size,
-        image_size=args.image_size,
-        class_cond=args.class_cond,
     )
 
     if len(args.teacher_model_path) > 0:  # path to the teacher score model.
@@ -82,7 +84,7 @@ def main():
         )
 
         teacher_model.load_state_dict(
-            dist_util.load_state_dict(args.teacher_model_path, map_location="cpu"),
+            dist_util.load_state_dict(args.teacher_model_path, embeded=True, map_location="cpu"),
         )
 
         teacher_model.to(dist_util.dev())
@@ -145,7 +147,10 @@ def main():
 
 def create_argparser():
     defaults = dict(
-        data_dir="",
+        manifest_path="",
+        feat_root="",
+        label_path="",
+        spk2info="",
         schedule_sampler="uniform",
         lr=1e-4,
         weight_decay=0.0,
