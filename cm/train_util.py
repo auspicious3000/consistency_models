@@ -344,7 +344,6 @@ class CMTrainLoop(TrainLoop):
             path, name = os.path.split(resume_checkpoint)
             teacher_name = name.replace("model", "teacher_model")
             resume_teacher_checkpoint = os.path.join(path, teacher_name)
-
             if bf.exists(resume_teacher_checkpoint) and dist.get_rank() == 0:
                 logger.log(
                     "loading model from checkpoint: {resume_teacher_checkpoint}..."
